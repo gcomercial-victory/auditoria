@@ -1,0 +1,97 @@
+import Link from "next/link";
+import { prisma } from "@/lib/prisma";
+import { StatusBadge } from "@/components/StatusBadge";
+import { dateToKey } from "@/lib/date";
+import type { EntryStatus } from "@prisma/client";
+
+const STATUS_OPTIONS: EntryStatus[] = ["PENDENTE", "RECEBIDO", "VERIFICADO", "DIVERGENCIA"];
+
+export default async function HistoryPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ property?: string; status?: string }>;
+}) {
+  const { property: propertySlug, status } = await searchParams;
+
+  const properties = await prisma.property.findMany({ orderBy: { name: "asc" } });
+
+  const entries = await prisma.logEntry.findMany({
+    where: {
+      property: propertySlug ? { slug: propertySlug } : undefined,
+      status: status && STATUS_OPTIONS.includes(status as EntryStatus) ? (status as EntryStatus) : undefined,
+    },
+    include: { property: true, reviewedBy: true },
+    orderBy: { date: "desc" },
+    take: 100,
+  });
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-lg font-semibold text-slate-900">Histórico</h1>
+        <p className="text-sm text-slate-500">Últimos 100 registros.</p>
+      </div>
+
+      <form className="flex flex-wrap gap-2" method="get">
+        <select name="property" defaultValue={propertySlug ?? ""} className="rounded-md border border-slate-300 px-2 py-1.5 text-sm">
+          <option value="">Todas as unidades</option>
+          {properties.map((p) => (
+            <option key={p.id} value={p.slug}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+        <select name="status" defaultValue={status ?? ""} className="rounded-md border border-slate-300 px-2 py-1.5 text-sm">
+          <option value="">Todos os status</option>
+          {STATUS_OPTIONS.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+        <button type="submit" className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">
+          Filtrar
+        </button>
+      </form>
+
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <table className="w-full text-left text-sm">
+          <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500">
+            <tr>
+              <th className="px-4 py-2">Data</th>
+              <th className="px-4 py-2">Unidade</th>
+              <th className="px-4 py-2">Status</th>
+              <th className="px-4 py-2">Revisado por</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {entries.map((entry) => {
+              const dateKey = dateToKey(entry.date);
+              return (
+                <tr key={entry.id} className="hover:bg-slate-50">
+                  <td className="px-4 py-2">
+                    <Link href={`/properties/${entry.property.slug}/${dateKey}`} className="text-blue-600 hover:underline">
+                      {dateKey}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-2">{entry.property.name}</td>
+                  <td className="px-4 py-2">
+                    <StatusBadge status={entry.status} />
+                  </td>
+                  <td className="px-4 py-2 text-slate-500">{entry.reviewedBy?.name ?? "—"}</td>
+                </tr>
+              );
+            })}
+            {entries.length === 0 && (
+              <tr>
+                <td colSpan={4} className="px-4 py-6 text-center text-slate-400">
+                  Nenhum registro encontrado.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

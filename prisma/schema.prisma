@@ -1,0 +1,119 @@
+// Schema for the daily audit / logbook verification app.
+// Covers: Victory Business, Victory Suites, Central de Reservas.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+}
+
+enum FieldType {
+  BOOLEAN
+  NUMBER
+  TEXT
+}
+
+enum ItemStatus {
+  OK
+  PENDENTE
+  PROBLEMA
+}
+
+enum EntryStatus {
+  PENDENTE
+  RECEBIDO
+  VERIFICADO
+  DIVERGENCIA
+}
+
+enum SourceType {
+  MANUAL
+  UPLOAD
+  SHEET_IMPORT
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(MANAGER)
+  createdAt    DateTime @default(now())
+
+  reviewedEntries LogEntry[] @relation("ReviewedBy")
+}
+
+model Property {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+
+  checklistItems ChecklistItemTemplate[]
+  logEntries     LogEntry[]
+}
+
+model ChecklistItemTemplate {
+  id         String    @id @default(cuid())
+  propertyId String
+  property   Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  label      String
+  type       FieldType @default(BOOLEAN)
+  required   Boolean   @default(true)
+  order      Int       @default(0)
+  archived   Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+
+  responses ChecklistItemResponse[]
+}
+
+model LogEntry {
+  id         String     @id @default(cuid())
+  propertyId String
+  property   Property   @relation(fields: [propertyId], references: [id])
+  date       DateTime // stored at midnight UTC, represents the calendar day the logbook covers
+  sourceType SourceType @default(MANUAL)
+  fileUrl    String?
+  fileName   String?
+  submittedBy String? // free-text name of who at reception submitted it
+  notes      String?
+
+  status     EntryStatus @default(PENDENTE)
+  reviewedById String?
+  reviewedBy   User?      @relation("ReviewedBy", fields: [reviewedById], references: [id])
+  reviewedAt   DateTime?
+  reviewNotes  String?
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  responses ChecklistItemResponse[]
+
+  @@unique([propertyId, date])
+  @@index([date])
+}
+
+model ChecklistItemResponse {
+  id            String     @id @default(cuid())
+  logEntryId    String
+  logEntry      LogEntry   @relation(fields: [logEntryId], references: [id], onDelete: Cascade)
+  templateItemId String
+  templateItem  ChecklistItemTemplate @relation(fields: [templateItemId], references: [id])
+
+  valueBoolean  Boolean?
+  valueNumber   Float?
+  valueText     String?
+
+  status        ItemStatus @default(OK)
+  note          String?
+
+  @@unique([logEntryId, templateItemId])
+}
