@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { getOrCreateEntry } from "@/lib/logEntry";
 import { parseDateFromSubject } from "@/lib/date";
-import { searchMessages, getThreadMessages, type GmailMessageSummary } from "@/lib/gmail";
+import { listMessageIds, getMessage, getThreadMessages, type GmailMessageSummary } from "@/lib/gmail";
 import { extractFieldsFromText } from "@/lib/emailExtract";
 import type { ChecklistItemTemplate, Property } from "@prisma/client";
 
@@ -12,6 +12,11 @@ const RAW_TEXT_LABEL: Record<string, string> = {
 };
 
 const LOOKBACK = "newer_than:30d";
+
+// Vercel Hobby caps a function at ~60s. Each new message costs a Gmail
+// fetch + a Claude call, so cap how many we process per invocation — the
+// rest catch up on the next cron run or manual click.
+const MAX_NEW_PER_RUN = 12;
 
 export interface SyncResult {
   property: string;
@@ -70,10 +75,7 @@ async function processMessage(
   aiFields: ChecklistItemTemplate[],
   rawTemplate: ChecklistItemTemplate | undefined,
   dateKeyOverride?: string | null
-): Promise<{ outcome: "processed" | "skipped" | "error"; error?: string }> {
-  const already = await prisma.processedEmail.findUnique({ where: { gmailMessageId: msg.id } });
-  if (already) return { outcome: "skipped" };
-
+): Promise<{ outcome: "processed" | "error"; error?: string }> {
   const dateKey = dateKeyOverride ?? parseDateFromSubject(msg.subject, msg.date ? new Date(msg.date) : new Date());
   if (!dateKey) return { outcome: "error", error: `Não foi possível identificar a data no assunto "${msg.subject}".` };
 
@@ -119,7 +121,29 @@ function splitFields(templates: ChecklistItemTemplate[], propertySlug: string) {
   return { rawTemplate, aiFields };
 }
 
-async function syncBusiness(property: Property): Promise<SyncResult> {
+// Returns the subset of ids/threadIds not already present in ProcessedEmail.
+async function filterUnprocessed<T extends { id: string }>(refs: T[]): Promise<T[]> {
+  if (refs.length === 0) return [];
+  const already = await prisma.processedEmail.findMany({
+    where: { gmailMessageId: { in: refs.map((r) => r.id) } },
+    select: { gmailMessageId: true },
+  });
+  const processedIds = new Set(already.map((a) => a.gmailMessageId));
+  return refs.filter((r) => !processedIds.has(r.id));
+}
+
+// Shared across properties within a single run so the invocation stays
+// under the platform's function-duration limit.
+class Budget {
+  remaining = MAX_NEW_PER_RUN;
+  take(): boolean {
+    if (this.remaining <= 0) return false;
+    this.remaining--;
+    return true;
+  }
+}
+
+async function syncBusiness(property: Property, budget: Budget): Promise<SyncResult> {
   const result = newResult(property.name);
 
   const templates = await prisma.checklistItemTemplate.findMany({
@@ -127,22 +151,26 @@ async function syncBusiness(property: Property): Promise<SyncResult> {
   });
   const { rawTemplate, aiFields } = splitFields(templates, property.slug);
 
-  const messages = await searchMessages(
-    `from:recepcao.business@victoryhoteis.com subject:LOGBOOK ${LOOKBACK}`,
-    50
-  );
+  const refs = await listMessageIds(`from:recepcao.business@victoryhoteis.com subject:LOGBOOK ${LOOKBACK}`, 60);
+  const unprocessed = await filterUnprocessed(refs);
+  result.skipped = refs.length - unprocessed.length;
 
-  for (const msg of messages) {
+  for (const ref of unprocessed) {
+    if (!budget.take()) break;
+    const msg = await getMessage(ref.id);
     const outcome = await processMessage(msg, property, aiFields, rawTemplate);
     if (outcome.outcome === "processed") result.processed++;
-    else if (outcome.outcome === "skipped") result.skipped++;
     else result.errors.push({ messageId: msg.id, subject: msg.subject, error: outcome.error ?? "Erro desconhecido." });
   }
 
   return result;
 }
 
-async function syncSuitesAndReservas(suites: Property, reservas: Property): Promise<[SyncResult, SyncResult]> {
+async function syncSuitesAndReservas(
+  suites: Property,
+  reservas: Property,
+  budget: Budget
+): Promise<[SyncResult, SyncResult]> {
   const suitesResult = newResult(suites.name);
   const reservasResult = newResult(reservas.name);
 
@@ -156,36 +184,44 @@ async function syncSuitesAndReservas(suites: Property, reservas: Property): Prom
   });
   const { rawTemplate: reservasRaw, aiFields: reservasAiFields } = splitFields(reservasTemplates, reservas.slug);
 
-  const rootMessages = await searchMessages(
+  // Only the Suites root message determines whether we've already handled
+  // a given day's thread — cheap to check before fetching the full thread.
+  const rootRefs = await listMessageIds(
     `from:recepcao.suites@victoryhoteis.com subject:AUDITORIA ${LOOKBACK}`,
     30
   );
-  const threadIds = Array.from(new Set(rootMessages.map((m) => m.threadId).filter(Boolean)));
+  const unprocessedRoots = await filterUnprocessed(rootRefs);
+  suitesResult.skipped = rootRefs.length - unprocessedRoots.length;
+
+  const threadIds = Array.from(new Set(unprocessedRoots.map((r) => r.threadId)));
 
   for (const threadId of threadIds) {
+    if (budget.remaining <= 0) break;
+
     const threadMessages = await getThreadMessages(threadId);
     const suitesMsg = threadMessages.find((m) => m.from.toLowerCase().includes("recepcao.suites@victoryhoteis.com"));
     if (!suitesMsg) continue;
 
     const dateKey = parseDateFromSubject(suitesMsg.subject, suitesMsg.date ? new Date(suitesMsg.date) : new Date());
 
-    const suitesOutcome = await processMessage(suitesMsg, suites, suitesAiFields, suitesRaw, dateKey);
-    if (suitesOutcome.outcome === "processed") suitesResult.processed++;
-    else if (suitesOutcome.outcome === "skipped") suitesResult.skipped++;
-    else
-      suitesResult.errors.push({
-        messageId: suitesMsg.id,
-        subject: suitesMsg.subject,
-        error: suitesOutcome.error ?? "Erro desconhecido.",
-      });
+    if (budget.take()) {
+      const suitesOutcome = await processMessage(suitesMsg, suites, suitesAiFields, suitesRaw, dateKey);
+      if (suitesOutcome.outcome === "processed") suitesResult.processed++;
+      else
+        suitesResult.errors.push({
+          messageId: suitesMsg.id,
+          subject: suitesMsg.subject,
+          error: suitesOutcome.error ?? "Erro desconhecido.",
+        });
+    }
 
-    const reservasMessages = threadMessages.filter((m) =>
-      m.from.toLowerCase().includes("centraldereservas@victoryhoteis.com")
+    const reservasMessages = await filterUnprocessed(
+      threadMessages.filter((m) => m.from.toLowerCase().includes("centraldereservas@victoryhoteis.com"))
     );
     for (const rMsg of reservasMessages) {
+      if (!budget.take()) break;
       const outcome = await processMessage(rMsg, reservas, reservasAiFields, reservasRaw, dateKey);
       if (outcome.outcome === "processed") reservasResult.processed++;
-      else if (outcome.outcome === "skipped") reservasResult.skipped++;
       else
         reservasResult.errors.push({
           messageId: rMsg.id,
@@ -203,14 +239,15 @@ export async function runEmailSync(): Promise<SyncResult[]> {
   const bySlug = new Map(properties.map((p) => [p.slug, p]));
 
   const results: SyncResult[] = [];
+  const budget = new Budget();
 
   const business = bySlug.get("victory-business");
-  if (business) results.push(await syncBusiness(business));
+  if (business) results.push(await syncBusiness(business, budget));
 
   const suites = bySlug.get("victory-suites");
   const reservas = bySlug.get("central-reservas");
   if (suites && reservas) {
-    const [suitesResult, reservasResult] = await syncSuitesAndReservas(suites, reservas);
+    const [suitesResult, reservasResult] = await syncSuitesAndReservas(suites, reservas, budget);
     results.push(suitesResult, reservasResult);
   }
 

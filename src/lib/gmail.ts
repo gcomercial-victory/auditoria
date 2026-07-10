@@ -85,16 +85,29 @@ function toSummary(message: gmail_v1.Schema$Message): GmailMessageSummary {
   };
 }
 
-export async function searchMessages(query: string, maxResults = 30): Promise<GmailMessageSummary[]> {
+// Cheap: only the message/thread IDs, no body fetch. Use this to filter out
+// already-processed messages before paying for a full get() per message.
+export async function listMessageIds(
+  query: string,
+  maxResults = 30
+): Promise<{ id: string; threadId: string }[]> {
   const gmail = getGmailClient();
   const listRes = await gmail.users.messages.list({ userId: "me", q: query, maxResults });
-  const refs = listRes.data.messages ?? [];
+  return (listRes.data.messages ?? [])
+    .filter((m): m is { id: string; threadId: string } => Boolean(m.id && m.threadId));
+}
 
+export async function getMessage(id: string): Promise<GmailMessageSummary> {
+  const gmail = getGmailClient();
+  const msgRes = await gmail.users.messages.get({ userId: "me", id, format: "full" });
+  return toSummary(msgRes.data);
+}
+
+export async function searchMessages(query: string, maxResults = 30): Promise<GmailMessageSummary[]> {
+  const refs = await listMessageIds(query, maxResults);
   const results: GmailMessageSummary[] = [];
   for (const ref of refs) {
-    if (!ref.id) continue;
-    const msgRes = await gmail.users.messages.get({ userId: "me", id: ref.id, format: "full" });
-    results.push(toSummary(msgRes.data));
+    results.push(await getMessage(ref.id));
   }
   return results;
 }
