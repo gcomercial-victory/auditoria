@@ -6,7 +6,7 @@ import path from "path";
 import { mkdir, writeFile } from "fs/promises";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { dateKeyToDate } from "@/lib/date";
+import { getOrCreateEntry } from "@/lib/logEntry";
 import { toCsvExportUrl, parseCsv, findRowForDate, matchColumnForLabel } from "@/lib/sheetImport";
 import type { FieldType, ItemStatus } from "@prisma/client";
 
@@ -16,17 +16,6 @@ async function requireSession() {
   const session = await auth();
   if (!session?.user) throw new Error("Não autenticado.");
   return session;
-}
-
-async function getOrCreateEntry(propertyId: string, dateKey: string) {
-  const date = dateKeyToDate(dateKey);
-  const existing = await prisma.logEntry.findUnique({
-    where: { propertyId_date: { propertyId, date } },
-  });
-  if (existing) return existing;
-  return prisma.logEntry.create({
-    data: { propertyId, date, status: "PENDENTE" },
-  });
 }
 
 function parseResponseValue(type: FieldType, raw: FormDataEntryValue | null) {

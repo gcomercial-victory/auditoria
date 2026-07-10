@@ -39,6 +39,7 @@ enum SourceType {
   MANUAL
   UPLOAD
   SHEET_IMPORT
+  EMAIL
 }
 
 model User {
@@ -58,8 +59,9 @@ model Property {
   name      String
   createdAt DateTime @default(now())
 
-  checklistItems ChecklistItemTemplate[]
-  logEntries     LogEntry[]
+  checklistItems  ChecklistItemTemplate[]
+  logEntries      LogEntry[]
+  processedEmails ProcessedEmail[]
 }
 
 model ChecklistItemTemplate {
@@ -117,4 +119,18 @@ model ChecklistItemResponse {
   note          String?
 
   @@unique([logEntryId, templateItemId])
+}
+
+// Tracks which Gmail messages have already been ingested, so the sync job
+// never processes the same email twice.
+model ProcessedEmail {
+  id              String   @id @default(cuid())
+  gmailMessageId  String   @unique
+  propertyId      String
+  property        Property @relation(fields: [propertyId], references: [id])
+  logEntryId      String?
+  emailSubject    String?
+  emailFrom       String?
+  emailDate       DateTime?
+  processedAt     DateTime @default(now())
 }
