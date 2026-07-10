@@ -33,13 +33,18 @@ export async function extractFieldsFromText(
 ): Promise<ExtractedValues> {
   if (fields.length === 0 || !emailText.trim()) return {};
 
+  // Anthropic tool schema keys must match ^[a-zA-Z0-9_.-]{1,64}$, but our
+  // checklist labels have spaces/accents/punctuation (e.g. "Turno /
+  // Funcionários") — so use a safe positional key and map back afterwards.
+  const keyForIndex = (index: number) => `field_${index}`;
+
   const properties: Record<string, { type: string; description: string }> = {};
-  for (const field of fields) {
-    properties[field.label] = {
+  fields.forEach((field, index) => {
+    properties[keyForIndex(index)] = {
       type: JSON_TYPE[field.type],
       description: `Valor do campo "${field.label}", se estiver claramente presente no texto.`,
     };
-  }
+  });
 
   const anthropic = getClient();
   const response = await anthropic.messages.create({
@@ -71,5 +76,14 @@ export async function extractFieldsFromText(
 
   const toolUse = response.content.find((block) => block.type === "tool_use");
   if (!toolUse || toolUse.type !== "tool_use") return {};
-  return (toolUse.input ?? {}) as ExtractedValues;
+
+  const raw = (toolUse.input ?? {}) as Record<string, string | number | boolean>;
+  const result: ExtractedValues = {};
+  fields.forEach((field, index) => {
+    const value = raw[keyForIndex(index)];
+    if (value !== undefined && value !== null && value !== "") {
+      result[field.label] = value;
+    }
+  });
+  return result;
 }
