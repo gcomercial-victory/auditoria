@@ -53,7 +53,14 @@ export default async function LogEntryPage({
             <h1 className="text-lg font-semibold text-slate-900">{property.name}</h1>
             <p className="text-sm text-slate-500">{formatDateKeyLong(dateKey)}</p>
           </div>
-          <StatusBadge status={entry?.status ?? "PENDENTE"} />
+          <div className="flex items-center gap-2">
+            {entry?.sourceType === "EMAIL" && (
+              <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+                ✉️ Importado por e-mail
+              </span>
+            )}
+            <StatusBadge status={entry?.status ?? "PENDENTE"} />
+          </div>
         </div>
         <div className="mt-3 flex items-center gap-2 text-sm">
           <Link

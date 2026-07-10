@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { auth } from "@/auth";
 import { logout } from "@/app/actions/auth-actions";
+import { SyncButton } from "@/components/SyncButton";
 
 export async function Nav() {
   const session = await auth();
@@ -29,6 +30,7 @@ export async function Nav() {
         </div>
 
         <div className="flex items-center gap-3 text-sm text-slate-600">
+          <SyncButton />
           {session?.user?.name && <span>{session.user.name}</span>}
           <form action={logout}>
             <button

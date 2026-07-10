@@ -5,8 +5,10 @@ export default auth((req) => {
   const isLoggedIn = !!req.auth;
   const isAuthRoute = req.nextUrl.pathname.startsWith("/login");
   const isApiAuthRoute = req.nextUrl.pathname.startsWith("/api/auth");
+  const isCronRoute = req.nextUrl.pathname.startsWith("/api/cron");
 
-  if (isApiAuthRoute) return NextResponse.next();
+  // Cron routes authenticate themselves via CRON_SECRET (no user session).
+  if (isApiAuthRoute || isCronRoute) return NextResponse.next();
 
   if (isAuthRoute) {
     if (isLoggedIn) return NextResponse.redirect(new URL("/", req.nextUrl));
