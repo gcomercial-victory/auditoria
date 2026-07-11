@@ -192,14 +192,18 @@ async function syncBusiness(property: Property, budget: Budget, seenIds: Set<str
   // "RELATÓRIOS DE AUDITORIA" / "RESUMO DE AUDITORIA": a separate daily
   // e-mail pair, each its own thread — Central de Reservas occasionally
   // replies on the RESUMO thread, so we still walk the thread for that.
+  //
+  // We deliberately don't pre-filter these root refs by ProcessedEmail: the
+  // search hit's own message id isn't necessarily the id we end up recording
+  // (a thread can have more than one business-sent message matching the
+  // query), so we check "already processed?" below on the actual message
+  // we're about to record instead — otherwise a mismatched id never
+  // converges and the same thread gets reprocessed on every run.
   const auditRootRefs = await listMessageIds(
     `from:recepcao.business@victoryhoteis.com subject:AUDITORIA ${LOOKBACK}`,
     30
   );
-  const unprocessedAuditRoots = await filterUnprocessed(auditRootRefs);
-  result.skipped += auditRootRefs.length - unprocessedAuditRoots.length;
-
-  const auditThreadIds = Array.from(new Set(unprocessedAuditRoots.map((r) => r.threadId)));
+  const auditThreadIds = Array.from(new Set(auditRootRefs.map((r) => r.threadId)));
 
   for (const threadId of auditThreadIds) {
     if (budget.remaining <= 0) break;
@@ -210,7 +214,10 @@ async function syncBusiness(property: Property, budget: Budget, seenIds: Set<str
 
     const dateKey = parseDateFromSubject(businessMsg.subject, businessMsg.date ? new Date(businessMsg.date) : new Date());
 
-    if (budget.take()) {
+    const [unprocessedBusinessMsg] = await filterUnprocessed([businessMsg]);
+    if (!unprocessedBusinessMsg) {
+      result.skipped++;
+    } else if (budget.take()) {
       const outcome = await processMessage(businessMsg, property, aiFields, auditRaw, seenIds, dateKey);
       if (outcome.outcome === "processed") result.processed++;
       else
@@ -221,10 +228,10 @@ async function syncBusiness(property: Property, budget: Budget, seenIds: Set<str
         });
     }
 
-    const reservasMessages = await filterUnprocessed(
-      threadMessages.filter((m) => m.from.toLowerCase().includes("centraldereservas@victoryhoteis.com"))
-    );
-    for (const rMsg of reservasMessages) {
+    const reservasCandidates = threadMessages.filter((m) => m.from.toLowerCase().includes("centraldereservas@victoryhoteis.com"));
+    const unprocessedReservas = await filterUnprocessed(reservasCandidates);
+    result.skipped += reservasCandidates.length - unprocessedReservas.length;
+    for (const rMsg of unprocessedReservas) {
       if (!budget.take()) break;
       const outcome = await processMessage(rMsg, property, aiFields, reservasRaw, seenIds, dateKey);
       if (outcome.outcome === "processed") result.processed++;
@@ -248,16 +255,15 @@ async function syncSuites(suites: Property, budget: Budget, seenIds: Set<string>
   const suitesRaw = rawByLabel.get(SUITES_RAW_LABEL);
   const reservasRaw = rawByLabel.get(RESERVAS_RAW_LABEL);
 
-  // Only the Suites root message determines whether we've already handled
-  // a given day's thread — cheap to check before fetching the full thread.
+  // Same reasoning as syncBusiness's audit thread walk: don't pre-filter
+  // root refs by ProcessedEmail, since the search hit's id can differ from
+  // the message we actually record. Check "already processed?" on the real
+  // message right before recording it.
   const rootRefs = await listMessageIds(
     `from:recepcao.suites@victoryhoteis.com subject:AUDITORIA ${LOOKBACK}`,
     30
   );
-  const unprocessedRoots = await filterUnprocessed(rootRefs);
-  result.skipped = rootRefs.length - unprocessedRoots.length;
-
-  const threadIds = Array.from(new Set(unprocessedRoots.map((r) => r.threadId)));
+  const threadIds = Array.from(new Set(rootRefs.map((r) => r.threadId)));
 
   for (const threadId of threadIds) {
     if (budget.remaining <= 0) break;
@@ -268,7 +274,10 @@ async function syncSuites(suites: Property, budget: Budget, seenIds: Set<string>
 
     const dateKey = parseDateFromSubject(suitesMsg.subject, suitesMsg.date ? new Date(suitesMsg.date) : new Date());
 
-    if (budget.take()) {
+    const [unprocessedSuitesMsg] = await filterUnprocessed([suitesMsg]);
+    if (!unprocessedSuitesMsg) {
+      result.skipped++;
+    } else if (budget.take()) {
       const suitesOutcome = await processMessage(suitesMsg, suites, aiFields, suitesRaw, seenIds, dateKey);
       if (suitesOutcome.outcome === "processed") result.processed++;
       else
@@ -279,10 +288,10 @@ async function syncSuites(suites: Property, budget: Budget, seenIds: Set<string>
         });
     }
 
-    const reservasMessages = await filterUnprocessed(
-      threadMessages.filter((m) => m.from.toLowerCase().includes("centraldereservas@victoryhoteis.com"))
-    );
-    for (const rMsg of reservasMessages) {
+    const reservasCandidates = threadMessages.filter((m) => m.from.toLowerCase().includes("centraldereservas@victoryhoteis.com"));
+    const unprocessedReservas = await filterUnprocessed(reservasCandidates);
+    result.skipped += reservasCandidates.length - unprocessedReservas.length;
+    for (const rMsg of unprocessedReservas) {
       if (!budget.take()) break;
       const outcome = await processMessage(rMsg, suites, aiFields, reservasRaw, seenIds, dateKey);
       if (outcome.outcome === "processed") result.processed++;
