@@ -14,3 +14,9 @@ export const SUITES_AUDIT_RAW_LABEL = "Registro bruto do e-mail (AUDITORIA)";
 // belongs to, under these labels.
 export const RESERVAS_NOTES_LABEL = "Instruções/atualizações da Central de Reservas";
 export const RESERVAS_RAW_LABEL = "Registro bruto da resposta na thread de auditoria";
+
+// These carry who was on shift and how much cash was counted — letting an
+// auditor edit them after the fact would let responsibility be shifted away
+// from whoever actually submitted the e-mail, so the checklist only lets the
+// auditor conference (status/note) them, never rewrite the value itself.
+export const IMMUTABLE_VALUE_LABELS = ["Turno / Funcionários", "Caixa"];

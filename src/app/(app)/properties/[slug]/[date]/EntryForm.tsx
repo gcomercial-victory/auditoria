@@ -1,8 +1,21 @@
 "use client";
 
 import { useActionState } from "react";
-import type { ChecklistItemTemplate, ChecklistItemResponse } from "@prisma/client";
+import type { ChecklistItemTemplate, ChecklistItemResponse, ItemStatus } from "@prisma/client";
 import { saveEntryAction } from "./actions";
+import { IMMUTABLE_VALUE_LABELS } from "@/lib/checklistLabels";
+
+const IMMUTABLE_LABELS = new Set(IMMUTABLE_VALUE_LABELS);
+
+const STATUS_OPTIONS: { value: ItemStatus; label: string; activeClass: string }[] = [
+  { value: "OK", label: "✓ OK", activeClass: "has-checked:border-emerald-600 has-checked:bg-emerald-600 has-checked:text-white" },
+  {
+    value: "PENDENTE",
+    label: "Pendente",
+    activeClass: "has-checked:border-amber-500 has-checked:bg-amber-500 has-checked:text-white",
+  },
+  { value: "PROBLEMA", label: "Problema", activeClass: "has-checked:border-red-600 has-checked:bg-red-600 has-checked:text-white" },
+];
 
 type Props = {
   propertyId: string;
@@ -37,11 +50,15 @@ export function EntryForm({
         {templates.map((item) => {
           const response = responseByTemplate[item.id];
           const previous = previousByTemplate[item.id];
+          const isImmutable = IMMUTABLE_LABELS.has(item.label);
           return (
             <div key={item.id} className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <label className="text-sm font-medium text-slate-800" htmlFor={`item_${item.id}`}>
                   {item.label}
+                  {isImmutable && (
+                    <span className="ml-1.5 text-xs font-normal text-slate-400">(imutável — definido pelo e-mail)</span>
+                  )}
                 </label>
                 {item.type === "NUMBER" && previous?.valueNumber != null && (
                   <span className="text-xs text-slate-400">
@@ -51,48 +68,63 @@ export function EntryForm({
               </div>
 
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                {item.type === "BOOLEAN" && (
-                  <select
-                    id={`item_${item.id}`}
-                    name={`item_${item.id}`}
-                    defaultValue={response?.valueBoolean == null ? "" : String(response.valueBoolean)}
-                    className="rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-                  >
-                    <option value="">—</option>
-                    <option value="true">Sim</option>
-                    <option value="false">Não</option>
-                  </select>
-                )}
-                {item.type === "NUMBER" && (
-                  <input
-                    id={`item_${item.id}`}
-                    name={`item_${item.id}`}
-                    type="number"
-                    step="any"
-                    defaultValue={response?.valueNumber ?? ""}
-                    className="w-40 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-                  />
-                )}
-                {item.type === "TEXT" && (
-                  <textarea
-                    id={`item_${item.id}`}
-                    name={`item_${item.id}`}
-                    defaultValue={response?.valueText ?? ""}
-                    rows={2}
-                    className="w-full max-w-md rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-                  />
+                {isImmutable ? (
+                  <p className="w-full max-w-md rounded-md border border-slate-200 bg-slate-100 px-2 py-1.5 text-sm text-slate-700">
+                    {response?.valueText || <span className="text-slate-400">(sem valor)</span>}
+                  </p>
+                ) : (
+                  <>
+                    {item.type === "BOOLEAN" && (
+                      <select
+                        id={`item_${item.id}`}
+                        name={`item_${item.id}`}
+                        defaultValue={response?.valueBoolean == null ? "" : String(response.valueBoolean)}
+                        className="rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+                      >
+                        <option value="">—</option>
+                        <option value="true">Sim</option>
+                        <option value="false">Não</option>
+                      </select>
+                    )}
+                    {item.type === "NUMBER" && (
+                      <input
+                        id={`item_${item.id}`}
+                        name={`item_${item.id}`}
+                        type="number"
+                        step="any"
+                        defaultValue={response?.valueNumber ?? ""}
+                        className="w-40 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+                      />
+                    )}
+                    {item.type === "TEXT" && (
+                      <textarea
+                        id={`item_${item.id}`}
+                        name={`item_${item.id}`}
+                        defaultValue={response?.valueText ?? ""}
+                        rows={2}
+                        className="w-full max-w-md rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+                      />
+                    )}
+                  </>
                 )}
 
-                <select
-                  name={`status_${item.id}`}
-                  defaultValue={response?.status ?? "OK"}
-                  className="rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-                  title="Conferência do auditor"
-                >
-                  <option value="OK">✓ OK</option>
-                  <option value="PENDENTE">Pendente</option>
-                  <option value="PROBLEMA">Problema</option>
-                </select>
+                <div className="flex gap-1.5" role="radiogroup" aria-label="Conferência do auditor">
+                  {STATUS_OPTIONS.map((opt) => (
+                    <label
+                      key={opt.value}
+                      className={`cursor-pointer rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition ${opt.activeClass}`}
+                    >
+                      <input
+                        type="radio"
+                        name={`status_${item.id}`}
+                        value={opt.value}
+                        defaultChecked={(response?.status ?? "OK") === opt.value}
+                        className="sr-only"
+                      />
+                      {opt.label}
+                    </label>
+                  ))}
+                </div>
 
                 <input
                   name={`note_${item.id}`}

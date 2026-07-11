@@ -8,7 +8,10 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { getOrCreateEntry } from "@/lib/logEntry";
 import { toCsvExportUrl, parseCsv, findRowForDate, matchColumnForLabel } from "@/lib/sheetImport";
+import { IMMUTABLE_VALUE_LABELS } from "@/lib/checklistLabels";
 import type { FieldType, ItemStatus } from "@prisma/client";
+
+const IMMUTABLE_LABELS = new Set(IMMUTABLE_VALUE_LABELS);
 
 const UPLOAD_DIR = path.join(process.cwd(), "uploads");
 
@@ -50,10 +53,13 @@ export async function saveEntry(propertyId: string, dateKey: string, formData: F
       },
     }),
     ...templates.map((item) => {
-      const raw = formData.get(`item_${item.id}`);
       const statusRaw = formData.get(`status_${item.id}`);
       const noteRaw = formData.get(`note_${item.id}`);
-      const values = parseResponseValue(item.type, raw);
+      // Immutable fields (who was on shift, cash counted) keep whatever value
+      // the e-mail ingestion recorded — the auditor can only conference them.
+      const values = IMMUTABLE_LABELS.has(item.label)
+        ? {}
+        : parseResponseValue(item.type, formData.get(`item_${item.id}`));
 
       return prisma.checklistItemResponse.upsert({
         where: { logEntryId_templateItemId: { logEntryId: entry.id, templateItemId: item.id } },
