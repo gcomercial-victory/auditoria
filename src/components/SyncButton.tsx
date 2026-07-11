@@ -13,13 +13,13 @@ export function SyncButton() {
       <button
         type="submit"
         disabled={isPending}
-        className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+        className="rounded-full border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-60"
         title="Buscar novos logbooks/auditorias por e-mail"
       >
         {isPending ? "Sincronizando..." : "📥 Sincronizar e-mails"}
       </button>
       {state && (
-        <span className={`text-xs ${isError ? "text-red-600" : "text-emerald-600"}`}>
+        <span className={`text-xs ${isError ? "text-red-400" : "text-emerald-400"}`}>
           {state.startsWith("ok:") ? `${state.slice(3)} importado(s)` : state}
         </span>
       )}

@@ -3,17 +3,13 @@ import { getOrCreateEntry } from "@/lib/logEntry";
 import { resolveDateKey } from "@/lib/date";
 import { listMessageIds, getMessage, getThreadMessages, type GmailMessageSummary } from "@/lib/gmail";
 import { extractFieldsFromText } from "@/lib/emailExtract";
+import {
+  BUSINESS_LOGBOOK_RAW_LABEL as BUSINESS_RAW_LABEL,
+  BUSINESS_AUDIT_RAW_LABEL,
+  SUITES_AUDIT_RAW_LABEL as SUITES_RAW_LABEL,
+  RESERVAS_RAW_LABEL,
+} from "@/lib/checklistLabels";
 import type { ChecklistItemTemplate, Property } from "@prisma/client";
-
-const BUSINESS_RAW_LABEL = "Registro bruto dos e-mails (LOGBOOK)";
-// Business also gets a separate daily "RELATÓRIOS DE AUDITORIA" /
-// "RESUMO DE AUDITORIA" e-mail pair, distinct from the LOGBOOK thread.
-const BUSINESS_AUDIT_RAW_LABEL = "Registro bruto da auditoria (Business)";
-const SUITES_RAW_LABEL = "Registro bruto do e-mail (AUDITORIA)";
-// Central de Reservas audits both hotels rather than filing its own logbook,
-// so its replies get folded into whichever property's entry the thread
-// belongs to, under this label.
-const RESERVAS_RAW_LABEL = "Registro bruto da resposta na thread de auditoria";
 
 const LOOKBACK = "newer_than:15d";
 
