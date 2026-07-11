@@ -5,13 +5,14 @@ import { listMessageIds, getMessage, getThreadMessages, type GmailMessageSummary
 import { extractFieldsFromText } from "@/lib/emailExtract";
 import type { ChecklistItemTemplate, Property } from "@prisma/client";
 
-const RAW_TEXT_LABEL: Record<string, string> = {
-  "victory-business": "Registro bruto dos e-mails (LOGBOOK)",
-  "victory-suites": "Registro bruto do e-mail (AUDITORIA)",
-  "central-reservas": "Registro bruto da resposta na thread de auditoria",
-};
+const BUSINESS_RAW_LABEL = "Registro bruto dos e-mails (LOGBOOK)";
+const SUITES_RAW_LABEL = "Registro bruto do e-mail (AUDITORIA)";
+// Central de Reservas audits both hotels rather than filing its own logbook,
+// so its replies get folded into whichever property's entry the thread
+// belongs to, under this label.
+const RESERVAS_RAW_LABEL = "Registro bruto da resposta na thread de auditoria";
 
-const LOOKBACK = "newer_than:30d";
+const LOOKBACK = "newer_than:15d";
 
 // Vercel Hobby caps a function at ~60s. Each new message costs a Gmail
 // fetch + a Claude call, so cap how many we process per invocation — the
@@ -114,11 +115,13 @@ async function processMessage(
   return { outcome: "processed" };
 }
 
-function splitFields(templates: ChecklistItemTemplate[], propertySlug: string) {
-  const rawLabel = RAW_TEXT_LABEL[propertySlug];
-  const rawTemplate = templates.find((t) => t.label === rawLabel);
-  const aiFields = templates.filter((t) => t.id !== rawTemplate?.id);
-  return { rawTemplate, aiFields };
+// A property's template can hold more than one "raw text" field (e.g. Suites
+// has its own AUDITORIA raw log plus the Reservas thread-reply raw log), so
+// callers look up the specific one they need by label.
+function splitFields(templates: ChecklistItemTemplate[], rawLabels: string[]) {
+  const rawByLabel = new Map(templates.filter((t) => rawLabels.includes(t.label)).map((t) => [t.label, t]));
+  const aiFields = templates.filter((t) => !rawByLabel.has(t.label));
+  return { rawByLabel, aiFields };
 }
 
 // Returns the subset of ids/threadIds not already present in ProcessedEmail.
@@ -149,7 +152,8 @@ async function syncBusiness(property: Property, budget: Budget): Promise<SyncRes
   const templates = await prisma.checklistItemTemplate.findMany({
     where: { propertyId: property.id, archived: false },
   });
-  const { rawTemplate, aiFields } = splitFields(templates, property.slug);
+  const { rawByLabel, aiFields } = splitFields(templates, [BUSINESS_RAW_LABEL]);
+  const rawTemplate = rawByLabel.get(BUSINESS_RAW_LABEL);
 
   const refs = await listMessageIds(`from:recepcao.business@victoryhoteis.com subject:LOGBOOK ${LOOKBACK}`, 60);
   const unprocessed = await filterUnprocessed(refs);
@@ -166,23 +170,18 @@ async function syncBusiness(property: Property, budget: Budget): Promise<SyncRes
   return result;
 }
 
-async function syncSuitesAndReservas(
-  suites: Property,
-  reservas: Property,
-  budget: Budget
-): Promise<[SyncResult, SyncResult]> {
-  const suitesResult = newResult(suites.name);
-  const reservasResult = newResult(reservas.name);
+// Central de Reservas replies inside the same thread as the Suites AUDITORIA
+// e-mail, so both messages land on the Suites property's daily entry — just
+// under different "raw text" fields.
+async function syncSuites(suites: Property, budget: Budget): Promise<SyncResult> {
+  const result = newResult(suites.name);
 
-  const suitesTemplates = await prisma.checklistItemTemplate.findMany({
+  const templates = await prisma.checklistItemTemplate.findMany({
     where: { propertyId: suites.id, archived: false },
   });
-  const { rawTemplate: suitesRaw, aiFields: suitesAiFields } = splitFields(suitesTemplates, suites.slug);
-
-  const reservasTemplates = await prisma.checklistItemTemplate.findMany({
-    where: { propertyId: reservas.id, archived: false },
-  });
-  const { rawTemplate: reservasRaw, aiFields: reservasAiFields } = splitFields(reservasTemplates, reservas.slug);
+  const { rawByLabel, aiFields } = splitFields(templates, [SUITES_RAW_LABEL, RESERVAS_RAW_LABEL]);
+  const suitesRaw = rawByLabel.get(SUITES_RAW_LABEL);
+  const reservasRaw = rawByLabel.get(RESERVAS_RAW_LABEL);
 
   // Only the Suites root message determines whether we've already handled
   // a given day's thread — cheap to check before fetching the full thread.
@@ -191,7 +190,7 @@ async function syncSuitesAndReservas(
     30
   );
   const unprocessedRoots = await filterUnprocessed(rootRefs);
-  suitesResult.skipped = rootRefs.length - unprocessedRoots.length;
+  result.skipped = rootRefs.length - unprocessedRoots.length;
 
   const threadIds = Array.from(new Set(unprocessedRoots.map((r) => r.threadId)));
 
@@ -205,10 +204,10 @@ async function syncSuitesAndReservas(
     const dateKey = parseDateFromSubject(suitesMsg.subject, suitesMsg.date ? new Date(suitesMsg.date) : new Date());
 
     if (budget.take()) {
-      const suitesOutcome = await processMessage(suitesMsg, suites, suitesAiFields, suitesRaw, dateKey);
-      if (suitesOutcome.outcome === "processed") suitesResult.processed++;
+      const suitesOutcome = await processMessage(suitesMsg, suites, aiFields, suitesRaw, dateKey);
+      if (suitesOutcome.outcome === "processed") result.processed++;
       else
-        suitesResult.errors.push({
+        result.errors.push({
           messageId: suitesMsg.id,
           subject: suitesMsg.subject,
           error: suitesOutcome.error ?? "Erro desconhecido.",
@@ -220,10 +219,10 @@ async function syncSuitesAndReservas(
     );
     for (const rMsg of reservasMessages) {
       if (!budget.take()) break;
-      const outcome = await processMessage(rMsg, reservas, reservasAiFields, reservasRaw, dateKey);
-      if (outcome.outcome === "processed") reservasResult.processed++;
+      const outcome = await processMessage(rMsg, suites, aiFields, reservasRaw, dateKey);
+      if (outcome.outcome === "processed") result.processed++;
       else
-        reservasResult.errors.push({
+        result.errors.push({
           messageId: rMsg.id,
           subject: rMsg.subject,
           error: outcome.error ?? "Erro desconhecido.",
@@ -231,7 +230,7 @@ async function syncSuitesAndReservas(
     }
   }
 
-  return [suitesResult, reservasResult];
+  return result;
 }
 
 export async function runEmailSync(): Promise<SyncResult[]> {
@@ -245,11 +244,7 @@ export async function runEmailSync(): Promise<SyncResult[]> {
   if (business) results.push(await syncBusiness(business, budget));
 
   const suites = bySlug.get("victory-suites");
-  const reservas = bySlug.get("central-reservas");
-  if (suites && reservas) {
-    const [suitesResult, reservasResult] = await syncSuitesAndReservas(suites, reservas, budget);
-    results.push(suitesResult, reservasResult);
-  }
+  if (suites) results.push(await syncSuites(suites, budget));
 
   return results;
 }

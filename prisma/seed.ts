@@ -3,6 +3,14 @@ import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
+// Central de Reservas audits both hotels rather than submitting its own
+// logbook, so its fields live on both properties' checklists instead of a
+// separate "unit" with its own Pendente/Recebido card.
+const RESERVAS_ITEMS: { label: string; type: FieldType }[] = [
+  { label: "Instruções/atualizações da Central de Reservas", type: FieldType.TEXT },
+  { label: "Registro bruto da resposta na thread de auditoria", type: FieldType.TEXT },
+];
+
 // Fields mirror what actually shows up in the daily e-mails from reception,
 // so the AI email extractor can map straight onto these labels.
 const BUSINESS_ITEMS: { label: string; type: FieldType }[] = [
@@ -17,6 +25,7 @@ const BUSINESS_ITEMS: { label: string; type: FieldType }[] = [
   { label: "Pendências do dia", type: FieldType.TEXT },
   { label: "Observações da recepção", type: FieldType.TEXT },
   { label: "Registro bruto dos e-mails (LOGBOOK)", type: FieldType.TEXT },
+  ...RESERVAS_ITEMS,
 ];
 
 const SUITES_ITEMS: { label: string; type: FieldType }[] = [
@@ -26,20 +35,44 @@ const SUITES_ITEMS: { label: string; type: FieldType }[] = [
   { label: "Documento vencido", type: FieldType.TEXT },
   { label: "Outras pendências da auditoria", type: FieldType.TEXT },
   { label: "Registro bruto do e-mail (AUDITORIA)", type: FieldType.TEXT },
-];
-
-const RESERVAS_ITEMS: { label: string; type: FieldType }[] = [
-  { label: "Instruções/atualizações da Central de Reservas", type: FieldType.TEXT },
-  { label: "Registro bruto da resposta na thread de auditoria", type: FieldType.TEXT },
+  ...RESERVAS_ITEMS,
 ];
 
 const PROPERTIES: { slug: string; name: string; items: { label: string; type: FieldType }[] }[] = [
   { slug: "victory-business", name: "Victory Business", items: BUSINESS_ITEMS },
   { slug: "victory-suites", name: "Victory Suites", items: SUITES_ITEMS },
-  { slug: "central-reservas", name: "Central de Reservas", items: RESERVAS_ITEMS },
 ];
 
+// Central de Reservas used to be modeled as its own property/dashboard card.
+// It never received its own logbook, so we retire that row (and archive its
+// checklist items rather than delete them, to keep any historical responses
+// readable) instead of leaving a stray "Pendente" card on the panel.
+async function retireStaleReservasProperty() {
+  const stale = await prisma.property.findUnique({ where: { slug: "central-reservas" } });
+  if (!stale) return;
+
+  await prisma.checklistItemTemplate.updateMany({
+    where: { propertyId: stale.id, archived: false },
+    data: { archived: true },
+  });
+
+  const [logEntryCount, processedEmailCount] = await Promise.all([
+    prisma.logEntry.count({ where: { propertyId: stale.id } }),
+    prisma.processedEmail.count({ where: { propertyId: stale.id } }),
+  ]);
+
+  if (logEntryCount === 0 && processedEmailCount === 0) {
+    await prisma.property.delete({ where: { id: stale.id } });
+  } else {
+    console.log(
+      `Central de Reservas (${stale.id}) mantida no banco por ter histórico (${logEntryCount} registros, ${processedEmailCount} e-mails) — apenas removida do painel.`
+    );
+  }
+}
+
 async function main() {
+  await retireStaleReservasProperty();
+
   for (const p of PROPERTIES) {
     const property = await prisma.property.upsert({
       where: { slug: p.slug },

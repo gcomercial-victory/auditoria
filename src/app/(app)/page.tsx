@@ -13,6 +13,7 @@ export default async function DashboardPage({
   const isToday = dateKey === todayKey();
 
   const properties = await prisma.property.findMany({
+    where: { slug: { not: "central-reservas" } },
     orderBy: { name: "asc" },
     include: {
       logEntries: {
