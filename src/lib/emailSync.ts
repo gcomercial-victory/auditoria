@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { getOrCreateEntry } from "@/lib/logEntry";
-import { parseDateFromSubject } from "@/lib/date";
+import { resolveDateKey } from "@/lib/date";
 import { listMessageIds, getMessage, getThreadMessages, type GmailMessageSummary } from "@/lib/gmail";
 import { extractFieldsFromText } from "@/lib/emailExtract";
 import type { ChecklistItemTemplate, Property } from "@prisma/client";
@@ -87,8 +87,7 @@ async function processMessage(
   if (seenIds.has(msg.id)) return { outcome: "processed" };
   seenIds.add(msg.id);
 
-  const dateKey = dateKeyOverride ?? parseDateFromSubject(msg.subject, msg.date ? new Date(msg.date) : new Date());
-  if (!dateKey) return { outcome: "error", error: `Não foi possível identificar a data no assunto "${msg.subject}".` };
+  const dateKey = dateKeyOverride ?? resolveDateKey(msg.subject, msg.date ? new Date(msg.date) : new Date());
 
   const entry = await getOrCreateEntry(property.id, dateKey);
 
@@ -212,7 +211,7 @@ async function syncBusiness(property: Property, budget: Budget, seenIds: Set<str
     const businessMsg = threadMessages.find((m) => m.from.toLowerCase().includes("recepcao.business@victoryhoteis.com"));
     if (!businessMsg) continue;
 
-    const dateKey = parseDateFromSubject(businessMsg.subject, businessMsg.date ? new Date(businessMsg.date) : new Date());
+    const dateKey = resolveDateKey(businessMsg.subject, businessMsg.date ? new Date(businessMsg.date) : new Date());
 
     const [unprocessedBusinessMsg] = await filterUnprocessed([businessMsg]);
     if (!unprocessedBusinessMsg) {
@@ -272,7 +271,7 @@ async function syncSuites(suites: Property, budget: Budget, seenIds: Set<string>
     const suitesMsg = threadMessages.find((m) => m.from.toLowerCase().includes("recepcao.suites@victoryhoteis.com"));
     if (!suitesMsg) continue;
 
-    const dateKey = parseDateFromSubject(suitesMsg.subject, suitesMsg.date ? new Date(suitesMsg.date) : new Date());
+    const dateKey = resolveDateKey(suitesMsg.subject, suitesMsg.date ? new Date(suitesMsg.date) : new Date());
 
     const [unprocessedSuitesMsg] = await filterUnprocessed([suitesMsg]);
     if (!unprocessedSuitesMsg) {

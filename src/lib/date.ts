@@ -51,6 +51,14 @@ export function parseDateFromSubject(subject: string, referenceDate: Date): stri
   return /^\d{4}-\d{2}-\d{2}$/.test(key) ? key : null;
 }
 
+// Some AUDITORIA/LOGBOOK e-mails have no date in the subject at all (e.g. a
+// plain "AUDITORIA" or "Re: AUDITORIA" reply), which would otherwise leave
+// that message permanently unparseable and reprocessed forever. Falls back
+// to the e-mail's own received date in that case.
+export function resolveDateKey(subject: string, referenceDate: Date): string {
+  return parseDateFromSubject(subject, referenceDate) ?? dateToKey(referenceDate);
+}
+
 export function formatDateKeyLong(key: string): string {
   const date = dateKeyToDate(key);
   const formatted = date.toLocaleDateString("pt-BR", {
