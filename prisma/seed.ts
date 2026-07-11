@@ -25,6 +25,16 @@ const BUSINESS_ITEMS: { label: string; type: FieldType }[] = [
   { label: "Pendências do dia", type: FieldType.TEXT },
   { label: "Observações da recepção", type: FieldType.TEXT },
   { label: "Registro bruto dos e-mails (LOGBOOK)", type: FieldType.TEXT },
+  // "RELATÓRIOS DE AUDITORIA" / "RESUMO DE AUDITORIA" — a second, separate
+  // daily e-mail pair from the Business reception, distinct from the LOGBOOK.
+  { label: "Auditor", type: FieldType.TEXT },
+  { label: "Fundo de Caixa (Auditoria)", type: FieldType.TEXT },
+  { label: "Ocupação antes da Auditoria", type: FieldType.TEXT },
+  { label: "RDS", type: FieldType.TEXT },
+  { label: "Caixa – Estornos e Descontos", type: FieldType.TEXT },
+  { label: "Saldos Elevados", type: FieldType.TEXT },
+  { label: "Contas Pendentes", type: FieldType.TEXT },
+  { label: "Registro bruto da auditoria (Business)", type: FieldType.TEXT },
   ...RESERVAS_ITEMS,
 ];
 

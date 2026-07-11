@@ -6,6 +6,9 @@ import { extractFieldsFromText } from "@/lib/emailExtract";
 import type { ChecklistItemTemplate, Property } from "@prisma/client";
 
 const BUSINESS_RAW_LABEL = "Registro bruto dos e-mails (LOGBOOK)";
+// Business also gets a separate daily "RELATÓRIOS DE AUDITORIA" /
+// "RESUMO DE AUDITORIA" e-mail pair, distinct from the LOGBOOK thread.
+const BUSINESS_AUDIT_RAW_LABEL = "Registro bruto da auditoria (Business)";
 const SUITES_RAW_LABEL = "Registro bruto do e-mail (AUDITORIA)";
 // Central de Reservas audits both hotels rather than filing its own logbook,
 // so its replies get folded into whichever property's entry the thread
@@ -152,19 +155,69 @@ async function syncBusiness(property: Property, budget: Budget): Promise<SyncRes
   const templates = await prisma.checklistItemTemplate.findMany({
     where: { propertyId: property.id, archived: false },
   });
-  const { rawByLabel, aiFields } = splitFields(templates, [BUSINESS_RAW_LABEL]);
-  const rawTemplate = rawByLabel.get(BUSINESS_RAW_LABEL);
+  const { rawByLabel, aiFields } = splitFields(templates, [
+    BUSINESS_RAW_LABEL,
+    BUSINESS_AUDIT_RAW_LABEL,
+    RESERVAS_RAW_LABEL,
+  ]);
+  const logbookRaw = rawByLabel.get(BUSINESS_RAW_LABEL);
+  const auditRaw = rawByLabel.get(BUSINESS_AUDIT_RAW_LABEL);
+  const reservasRaw = rawByLabel.get(RESERVAS_RAW_LABEL);
 
-  const refs = await listMessageIds(`from:recepcao.business@victoryhoteis.com subject:LOGBOOK ${LOOKBACK}`, 60);
-  const unprocessed = await filterUnprocessed(refs);
-  result.skipped = refs.length - unprocessed.length;
+  // LOGBOOK: one message per shift, no thread walk needed.
+  const logbookRefs = await listMessageIds(`from:recepcao.business@victoryhoteis.com subject:LOGBOOK ${LOOKBACK}`, 60);
+  const unprocessedLogbook = await filterUnprocessed(logbookRefs);
+  result.skipped += logbookRefs.length - unprocessedLogbook.length;
 
-  for (const ref of unprocessed) {
+  for (const ref of unprocessedLogbook) {
     if (!budget.take()) break;
     const msg = await getMessage(ref.id);
-    const outcome = await processMessage(msg, property, aiFields, rawTemplate);
+    const outcome = await processMessage(msg, property, aiFields, logbookRaw);
     if (outcome.outcome === "processed") result.processed++;
     else result.errors.push({ messageId: msg.id, subject: msg.subject, error: outcome.error ?? "Erro desconhecido." });
+  }
+
+  // "RELATÓRIOS DE AUDITORIA" / "RESUMO DE AUDITORIA": a separate daily
+  // e-mail pair, each its own thread — Central de Reservas occasionally
+  // replies on the RESUMO thread, so we still walk the thread for that.
+  const auditRootRefs = await listMessageIds(
+    `from:recepcao.business@victoryhoteis.com subject:AUDITORIA ${LOOKBACK}`,
+    30
+  );
+  const unprocessedAuditRoots = await filterUnprocessed(auditRootRefs);
+  result.skipped += auditRootRefs.length - unprocessedAuditRoots.length;
+
+  const auditThreadIds = Array.from(new Set(unprocessedAuditRoots.map((r) => r.threadId)));
+
+  for (const threadId of auditThreadIds) {
+    if (budget.remaining <= 0) break;
+
+    const threadMessages = await getThreadMessages(threadId);
+    const businessMsg = threadMessages.find((m) => m.from.toLowerCase().includes("recepcao.business@victoryhoteis.com"));
+    if (!businessMsg) continue;
+
+    const dateKey = parseDateFromSubject(businessMsg.subject, businessMsg.date ? new Date(businessMsg.date) : new Date());
+
+    if (budget.take()) {
+      const outcome = await processMessage(businessMsg, property, aiFields, auditRaw, dateKey);
+      if (outcome.outcome === "processed") result.processed++;
+      else
+        result.errors.push({
+          messageId: businessMsg.id,
+          subject: businessMsg.subject,
+          error: outcome.error ?? "Erro desconhecido.",
+        });
+    }
+
+    const reservasMessages = await filterUnprocessed(
+      threadMessages.filter((m) => m.from.toLowerCase().includes("centraldereservas@victoryhoteis.com"))
+    );
+    for (const rMsg of reservasMessages) {
+      if (!budget.take()) break;
+      const outcome = await processMessage(rMsg, property, aiFields, reservasRaw, dateKey);
+      if (outcome.outcome === "processed") result.processed++;
+      else result.errors.push({ messageId: rMsg.id, subject: rMsg.subject, error: outcome.error ?? "Erro desconhecido." });
+    }
   }
 
   return result;
@@ -186,7 +239,7 @@ async function syncSuites(suites: Property, budget: Budget): Promise<SyncResult>
   // Only the Suites root message determines whether we've already handled
   // a given day's thread — cheap to check before fetching the full thread.
   const rootRefs = await listMessageIds(
-    `from:recepcao@victorysuites.com.br subject:AUDITORIA ${LOOKBACK}`,
+    `from:recepcao.suites@victoryhoteis.com subject:AUDITORIA ${LOOKBACK}`,
     30
   );
   const unprocessedRoots = await filterUnprocessed(rootRefs);
@@ -198,7 +251,7 @@ async function syncSuites(suites: Property, budget: Budget): Promise<SyncResult>
     if (budget.remaining <= 0) break;
 
     const threadMessages = await getThreadMessages(threadId);
-    const suitesMsg = threadMessages.find((m) => m.from.toLowerCase().includes("recepcao@victorysuites.com.br"));
+    const suitesMsg = threadMessages.find((m) => m.from.toLowerCase().includes("recepcao.suites@victoryhoteis.com"));
     if (!suitesMsg) continue;
 
     const dateKey = parseDateFromSubject(suitesMsg.subject, suitesMsg.date ? new Date(suitesMsg.date) : new Date());
