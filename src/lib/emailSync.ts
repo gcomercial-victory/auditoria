@@ -78,8 +78,15 @@ async function processMessage(
   property: Property,
   aiFields: ChecklistItemTemplate[],
   rawTemplate: ChecklistItemTemplate | undefined,
+  seenIds: Set<string>,
   dateKeyOverride?: string | null
 ): Promise<{ outcome: "processed" | "error"; error?: string }> {
+  // A message can surface twice in one run (e.g. a Reservas reply matched by
+  // more than one thread walk) — filterUnprocessed only checks the DB, not
+  // messages already handled earlier in this same invocation.
+  if (seenIds.has(msg.id)) return { outcome: "processed" };
+  seenIds.add(msg.id);
+
   const dateKey = dateKeyOverride ?? parseDateFromSubject(msg.subject, msg.date ? new Date(msg.date) : new Date());
   if (!dateKey) return { outcome: "error", error: `Não foi possível identificar a data no assunto "${msg.subject}".` };
 
@@ -104,8 +111,12 @@ async function processMessage(
     },
   });
 
-  await prisma.processedEmail.create({
-    data: {
+  // upsert, not create: guards against a race with another concurrent sync
+  // (e.g. cron firing while someone clicks "Sincronizar e-mails") hitting
+  // the same message.
+  await prisma.processedEmail.upsert({
+    where: { gmailMessageId: msg.id },
+    create: {
       gmailMessageId: msg.id,
       propertyId: property.id,
       logEntryId: entry.id,
@@ -113,6 +124,7 @@ async function processMessage(
       emailFrom: msg.from,
       emailDate: msg.date ? new Date(msg.date) : null,
     },
+    update: {},
   });
 
   return { outcome: "processed" };
@@ -149,7 +161,7 @@ class Budget {
   }
 }
 
-async function syncBusiness(property: Property, budget: Budget): Promise<SyncResult> {
+async function syncBusiness(property: Property, budget: Budget, seenIds: Set<string>): Promise<SyncResult> {
   const result = newResult(property.name);
 
   const templates = await prisma.checklistItemTemplate.findMany({
@@ -172,7 +184,7 @@ async function syncBusiness(property: Property, budget: Budget): Promise<SyncRes
   for (const ref of unprocessedLogbook) {
     if (!budget.take()) break;
     const msg = await getMessage(ref.id);
-    const outcome = await processMessage(msg, property, aiFields, logbookRaw);
+    const outcome = await processMessage(msg, property, aiFields, logbookRaw, seenIds);
     if (outcome.outcome === "processed") result.processed++;
     else result.errors.push({ messageId: msg.id, subject: msg.subject, error: outcome.error ?? "Erro desconhecido." });
   }
@@ -199,7 +211,7 @@ async function syncBusiness(property: Property, budget: Budget): Promise<SyncRes
     const dateKey = parseDateFromSubject(businessMsg.subject, businessMsg.date ? new Date(businessMsg.date) : new Date());
 
     if (budget.take()) {
-      const outcome = await processMessage(businessMsg, property, aiFields, auditRaw, dateKey);
+      const outcome = await processMessage(businessMsg, property, aiFields, auditRaw, seenIds, dateKey);
       if (outcome.outcome === "processed") result.processed++;
       else
         result.errors.push({
@@ -214,7 +226,7 @@ async function syncBusiness(property: Property, budget: Budget): Promise<SyncRes
     );
     for (const rMsg of reservasMessages) {
       if (!budget.take()) break;
-      const outcome = await processMessage(rMsg, property, aiFields, reservasRaw, dateKey);
+      const outcome = await processMessage(rMsg, property, aiFields, reservasRaw, seenIds, dateKey);
       if (outcome.outcome === "processed") result.processed++;
       else result.errors.push({ messageId: rMsg.id, subject: rMsg.subject, error: outcome.error ?? "Erro desconhecido." });
     }
@@ -226,7 +238,7 @@ async function syncBusiness(property: Property, budget: Budget): Promise<SyncRes
 // Central de Reservas replies inside the same thread as the Suites AUDITORIA
 // e-mail, so both messages land on the Suites property's daily entry — just
 // under different "raw text" fields.
-async function syncSuites(suites: Property, budget: Budget): Promise<SyncResult> {
+async function syncSuites(suites: Property, budget: Budget, seenIds: Set<string>): Promise<SyncResult> {
   const result = newResult(suites.name);
 
   const templates = await prisma.checklistItemTemplate.findMany({
@@ -238,9 +250,10 @@ async function syncSuites(suites: Property, budget: Budget): Promise<SyncResult>
 
   // Only the Suites root message determines whether we've already handled
   // a given day's thread — cheap to check before fetching the full thread.
-  const suitesQuery = `from:recepcao.suites@victoryhoteis.com subject:AUDITORIA ${LOOKBACK}`;
-  const rootRefs = await listMessageIds(suitesQuery, 30);
-  console.log("[syncSuites] query:", suitesQuery, "rootRefs:", rootRefs.length);
+  const rootRefs = await listMessageIds(
+    `from:recepcao.suites@victoryhoteis.com subject:AUDITORIA ${LOOKBACK}`,
+    30
+  );
   const unprocessedRoots = await filterUnprocessed(rootRefs);
   result.skipped = rootRefs.length - unprocessedRoots.length;
 
@@ -256,7 +269,7 @@ async function syncSuites(suites: Property, budget: Budget): Promise<SyncResult>
     const dateKey = parseDateFromSubject(suitesMsg.subject, suitesMsg.date ? new Date(suitesMsg.date) : new Date());
 
     if (budget.take()) {
-      const suitesOutcome = await processMessage(suitesMsg, suites, aiFields, suitesRaw, dateKey);
+      const suitesOutcome = await processMessage(suitesMsg, suites, aiFields, suitesRaw, seenIds, dateKey);
       if (suitesOutcome.outcome === "processed") result.processed++;
       else
         result.errors.push({
@@ -271,7 +284,7 @@ async function syncSuites(suites: Property, budget: Budget): Promise<SyncResult>
     );
     for (const rMsg of reservasMessages) {
       if (!budget.take()) break;
-      const outcome = await processMessage(rMsg, suites, aiFields, reservasRaw, dateKey);
+      const outcome = await processMessage(rMsg, suites, aiFields, reservasRaw, seenIds, dateKey);
       if (outcome.outcome === "processed") result.processed++;
       else
         result.errors.push({
@@ -291,12 +304,13 @@ export async function runEmailSync(): Promise<SyncResult[]> {
 
   const results: SyncResult[] = [];
   const budget = new Budget();
+  const seenIds = new Set<string>();
 
   const business = bySlug.get("victory-business");
-  if (business) results.push(await syncBusiness(business, budget));
+  if (business) results.push(await syncBusiness(business, budget, seenIds));
 
   const suites = bySlug.get("victory-suites");
-  if (suites) results.push(await syncSuites(suites, budget));
+  if (suites) results.push(await syncSuites(suites, budget, seenIds));
 
   return results;
 }
