@@ -186,7 +186,7 @@ async function syncSuites(suites: Property, budget: Budget): Promise<SyncResult>
   // Only the Suites root message determines whether we've already handled
   // a given day's thread — cheap to check before fetching the full thread.
   const rootRefs = await listMessageIds(
-    `from:recepcao.suites@victoryhoteis.com subject:AUDITORIA ${LOOKBACK}`,
+    `from:recepcao@victorysuites.com.br subject:AUDITORIA ${LOOKBACK}`,
     30
   );
   const unprocessedRoots = await filterUnprocessed(rootRefs);
@@ -198,7 +198,7 @@ async function syncSuites(suites: Property, budget: Budget): Promise<SyncResult>
     if (budget.remaining <= 0) break;
 
     const threadMessages = await getThreadMessages(threadId);
-    const suitesMsg = threadMessages.find((m) => m.from.toLowerCase().includes("recepcao.suites@victoryhoteis.com"));
+    const suitesMsg = threadMessages.find((m) => m.from.toLowerCase().includes("recepcao@victorysuites.com.br"));
     if (!suitesMsg) continue;
 
     const dateKey = parseDateFromSubject(suitesMsg.subject, suitesMsg.date ? new Date(suitesMsg.date) : new Date());
