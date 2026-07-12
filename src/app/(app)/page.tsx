@@ -4,11 +4,7 @@ import { addDaysToKey, dateKeyToDate, formatDateKeyLong, todayKey } from "@/lib/
 import { DARK_STATUS_DOT, DARK_STATUS_LABEL, DARK_STATUS_TEXT } from "@/lib/darkStatus";
 import { DashboardTabs } from "@/components/dashboard/DashboardTabs";
 import { CheckCircleIcon, ChevronLeftIcon, ChevronRightIcon, LayersIcon, WarningTriangleIcon } from "@/components/dashboard/icons";
-import {
-  BUSINESS_LOGBOOK_RAW_LABEL,
-  RESERVAS_RAW_LABEL,
-  SUITES_AUDIT_RAW_LABEL,
-} from "@/lib/checklistLabels";
+import { BUSINESS_LOGBOOK_RAW_LABEL, SUITES_AUDIT_RAW_LABEL } from "@/lib/checklistLabels";
 import type { EntryStatus } from "@prisma/client";
 
 type LabeledResponse = { templateItem: { label: string }; valueText: string | null };
@@ -59,13 +55,15 @@ export default async function DashboardPage({
     (p) => p.propertyId === business?.id && (p.emailSubject ?? "").toUpperCase().includes("LOGBOOK")
   );
   const suitesAuditEmail = processedToday.find((p) => p.propertyId === suites?.id);
-  const reservasEmail = processedToday.find((p) => (p.emailFrom ?? "").toLowerCase().includes("centraldereservas@"));
 
   const auditRows: { name: string; status: EntryStatus; time: string | null }[] = [
     { name: "Victory Business", status: businessEntry?.status ?? "PENDENTE", time: formatTime(businessEntry?.createdAt) },
     { name: "Victory Suites", status: suitesEntry?.status ?? "PENDENTE", time: formatTime(suitesEntry?.createdAt) },
   ];
 
+  // Central de Reservas isn't a third unit alongside Business/Suites — it
+  // audits both of them — so it doesn't get its own row here. Its fields
+  // are visible on the dedicated /reservas view instead.
   const logbookRows: { name: string; received: boolean; time: string | null }[] = [
     {
       name: "Business (LOGBOOK)",
@@ -76,13 +74,6 @@ export default async function DashboardPage({
       name: "Suites (AUDITORIA)",
       received: suitesEntry ? hasContent(suitesEntry.responses, SUITES_AUDIT_RAW_LABEL) : false,
       time: formatTime(suitesAuditEmail?.emailDate),
-    },
-    {
-      name: "Central de Reservas",
-      received:
-        (businessEntry ? hasContent(businessEntry.responses, RESERVAS_RAW_LABEL) : false) ||
-        (suitesEntry ? hasContent(suitesEntry.responses, RESERVAS_RAW_LABEL) : false),
-      time: formatTime(reservasEmail?.emailDate),
     },
   ];
 
