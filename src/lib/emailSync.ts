@@ -8,8 +8,17 @@ import {
   BUSINESS_AUDIT_RAW_LABEL,
   SUITES_AUDIT_RAW_LABEL as SUITES_RAW_LABEL,
   RESERVAS_RAW_LABEL,
+  IMMUTABLE_VALUE_LABELS,
 } from "@/lib/checklistLabels";
 import type { ChecklistItemTemplate, Property } from "@prisma/client";
+
+// Turno/Funcionários and Caixa carry one shift's worth of info each, and a
+// property can get several shift e-mails for the same calendar day (manhã/
+// tarde/noite). Gmail's search order isn't guaranteed chronological, so
+// blindly overwriting these on each new message can let an earlier shift's
+// e-mail clobber a later one depending on processing order. Accumulate them
+// instead, the same way the raw log text field already does.
+const ACCUMULATE_LABELS = new Set(IMMUTABLE_VALUE_LABELS);
 
 const LOOKBACK = "newer_than:15d";
 
@@ -37,6 +46,24 @@ async function applyExtractedValues(
   for (const template of templates) {
     const raw = extracted[template.label];
     if (raw === undefined || raw === null || raw === "") continue;
+
+    if (template.type === "TEXT" && ACCUMULATE_LABELS.has(template.label)) {
+      const newValue = String(raw).trim();
+      const existing = await prisma.checklistItemResponse.findUnique({
+        where: { logEntryId_templateItemId: { logEntryId, templateItemId: template.id } },
+      });
+      const combined =
+        existing?.valueText && !existing.valueText.includes(newValue)
+          ? `${existing.valueText} | ${newValue}`
+          : (existing?.valueText ?? newValue);
+
+      await prisma.checklistItemResponse.upsert({
+        where: { logEntryId_templateItemId: { logEntryId, templateItemId: template.id } },
+        create: { logEntryId, templateItemId: template.id, valueText: combined, status: "OK" },
+        update: { valueText: combined, status: "OK" },
+      });
+      continue;
+    }
 
     const values =
       template.type === "NUMBER"
